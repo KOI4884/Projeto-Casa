@@ -1,0 +1,122 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+
+#ifdef RTC_DATA_ATTR
+RTC_DATA_ATTR static bool overflow;
+#else
+static bool overflow;
+#endif
+
+#define PINO_RELE 13
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 64  // OLED display height, in pixels
+
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org");
+int LED = 18;
+
+//============================================================================
+#include <PubSubClient.h>
+const char* mqtt_server = "172.16.57.45";
+const char* hora_topico = "hora4";
+const char* min_topico = "min4";
+const char* retorno_hora = "rethora4";
+const char* retorno_min = "retmin4";
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+//============================================================================
+
+int horas = 0;
+int minu = 0;
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensagem recebida do tópico: ");
+  Serial.println(topic);
+
+  if (length < 2) {
+    Serial.println("Erro: Payload inválido.");
+    return;
+  }
+
+  // Extraindo os primeiros dois caracteres para horas
+  horas = (payload[0] - '0') * 10 + (payload[1] - '0');
+
+  Serial.print("Horas: ");
+  Serial.println(horas);
+
+  if (length >= 4) {
+    // Extraindo os dois últimos caracteres para minutos
+    minu = (payload[length-2] - '0') * 10 + (payload[length-1] - '0');
+
+    Serial.print("Minutos: ");
+    Serial.println(minu);
+  } else {
+    Serial.println("Erro: Não há caracteres suficientes para minutos.");
+    return;
+  }
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+     Serial.println("connected");
+     client.subscribe("rethora4");
+     client.subscribe("retmin4");
+    } else {
+     Serial.print("failed, rc=");
+     Serial.print(client.state());
+     Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PINO_RELE, OUTPUT);
+  pinMode(LED, OUTPUT);
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()){reconnect();}
+  client.loop();
+
+  // Atualize o cliente NTP
+  timeClient.update();
+
+  // Obtenha a hora atual
+  unsigned long epochTime = timeClient.getEpochTime();
+  int hours = (epochTime % 86400L) / 3600;
+  int minutes = (epochTime % 3600) / 60;
+  int seconds = epochTime % 60;
+
+  // Fuso horário do Brasil (UTC-3)
+  hours = (hours + 21) % 24;  // 21 horas é a compensação de 3 horas atrás do UTC
+
+ 
+  if (hours == horas && minutes == minu) {
+    for (int i = 0; i < 4; i++) {
+      digitalWrite(PINO_RELE, HIGH);
+      digitalWrite(LED, HIGH);
+      delay(200);
+      digitalWrite(PINO_RELE, LOW);
+      digitalWrite(LED, LOW);
+      delay(200);
+    }
+  }
+}
